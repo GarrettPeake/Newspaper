@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "newspaper",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-05-01",
+  "observability": { "enabled": true },
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  },
+  "vars": {
+    "INTEREST_THRESHOLD": "3",
+    "OPENROUTER_MODEL": "openai/gpt-oss-120b"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "newspaper",
+      "database_id": "eb919085-5ef7-48b2-8aea-c8f3118bbd29",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "QUEUE", "queue": "newspaper-articles" }
+    ],
+    "consumers": [
+      {
+        "queue": "newspaper-articles",
+        "max_batch_size": 10,
+        "max_batch_timeout": 30,
+        "max_retries": 3,
+        "dead_letter_queue": "newspaper-dlq"
+      }
+    ]
+  }
+}

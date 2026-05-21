@@ -1,0 +1,16 @@
+{
+  "name": "newspaper",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "migrate": "wrangler d1 migrations apply newspaper --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250505.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^4.0.0"
+  }
+}
