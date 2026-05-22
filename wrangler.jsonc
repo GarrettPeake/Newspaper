@@ -5,7 +5,7 @@
   "compatibility_date": "2025-05-01",
   "observability": { "enabled": true },
   "triggers": {
-    "crons": ["*/10 * * * *"]
+    "crons": ["*/30 * * * *"]
   },
   "vars": {
     "INTEREST_THRESHOLD": "3",
