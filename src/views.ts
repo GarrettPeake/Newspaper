@@ -14,6 +14,7 @@ nav a.active { color: #e8c896; }
 main { max-width: 900px; margin: 0 auto; padding: 8px 20px 40px; }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #23262a; }
 .row:last-child { border-bottom: 0; }
+.num { color: #4d535a; font-size: 13px; min-width: 28px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .badge { display: inline-flex; justify-content: center; align-items: center; width: 30px; height: 30px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; flex-shrink: 0; position: relative; cursor: help; }
 .badge:hover::after {
   content: attr(data-reason);
@@ -43,6 +44,9 @@ main { max-width: 900px; margin: 0 auto; padding: 8px 20px 40px; }
 .actions button { background: none; border: 1px solid #3a3e44; color: #8893a0; padding: 4px 9px; font: inherit; font-size: 11px; border-radius: 3px; cursor: pointer; }
 .actions button:hover { color: #d0d4d8; border-color: #5a5e64; }
 .empty { color: #6d747b; padding: 60px 0; text-align: center; }
+.pager { display: flex; gap: 16px; padding: 16px 0 0; font-size: 13px; color: #6d747b; }
+.pager a { color: #a8b4c0; }
+.pager span.disabled { color: #3a3e44; }
 textarea { width: 100%; min-height: 360px; background: #1a1d20; color: #d0d4d8; border: 1px solid #2a2d31; padding: 12px; font: 13px/1.5 ui-monospace, SFMono-Regular, monospace; border-radius: 4px; resize: vertical; }
 .prompt-form { margin: 0; }
 .prompt-form button { background: #e8c896; color: #15171a; border: 0; padding: 8px 18px; border-radius: 4px; font: inherit; font-weight: 600; cursor: pointer; margin-top: 10px; }
@@ -140,11 +144,12 @@ export function loginPage(next: string, error: boolean): string {
 </html>`;
 }
 
-function articleRow(a: Article, includeMarkRead: boolean): string {
+function articleRow(a: Article, num: number, includeMarkRead: boolean): string {
   const dom = domain(a.url);
   const titleHref = a.url ? `/open/${a.id}` : `/comments/${a.id}`;
   const titleExternal = a.url ? ' target="_blank" rel="noopener"' : '';
   return `<div class="row">
+  <span class="num">${num}.</span>
   <span class="badge" style="background: ${badgeColor(a.interest_level)}" data-reason="${escapeHtml(a.interest_reason)}">${a.interest_level}</span>
   <div class="body">
     <div class="title"><a href="${titleHref}"${titleExternal}>${escapeHtml(a.title)}</a></div>
@@ -158,11 +163,34 @@ function articleRow(a: Article, includeMarkRead: boolean): string {
 </div>`;
 }
 
-export function listPage(activeTab: string, articles: Article[], emptyMsg: string, includeMarkRead: boolean): string {
-  const content =
-    articles.length === 0
-      ? `<div class="empty">${escapeHtml(emptyMsg)}</div>`
-      : articles.map((a) => articleRow(a, includeMarkRead)).join('');
+function pager(basePath: string, page: number, hasMore: boolean): string {
+  const prevHref = page > 2 ? `${basePath}?page=${page - 1}` : basePath;
+  const nextHref = `${basePath}?page=${page + 1}`;
+  const prev = page > 1 ? `<a href="${prevHref}">‹ prev</a>` : `<span class="disabled">‹ prev</span>`;
+  const next = hasMore ? `<a href="${nextHref}">next ›</a>` : `<span class="disabled">next ›</span>`;
+  return `<div class="pager">${prev}<span>page ${page}</span>${next}</div>`;
+}
+
+const PAGE_SIZE_VIEW = 30;
+
+export function listPage(
+  activeTab: string,
+  basePath: string,
+  page: number,
+  items: Article[],
+  hasMore: boolean,
+  emptyMsg: string,
+  includeMarkRead: boolean
+): string {
+  const startNum = (page - 1) * PAGE_SIZE_VIEW + 1;
+  let content: string;
+  if (items.length === 0) {
+    content = `<div class="empty">${escapeHtml(emptyMsg)}</div>`;
+    if (page > 1) content += pager(basePath, page, false);
+  } else {
+    content = items.map((a, i) => articleRow(a, startNum + i, includeMarkRead)).join('');
+    content += pager(basePath, page, hasMore);
+  }
   return shell(activeTab, content);
 }
 

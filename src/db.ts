@@ -13,29 +13,46 @@ export interface Article {
   read_at: number | null;
 }
 
-export async function getInterestingUnread(env: Env, threshold: number): Promise<Article[]> {
-  const res = await env.DB.prepare(
-    'SELECT * FROM articles WHERE read_at IS NULL AND interest_level >= ? ORDER BY hn_score DESC LIMIT 200'
-  )
-    .bind(threshold)
-    .all<Article>();
-  return res.results;
+export const PAGE_SIZE = 30;
+
+export interface Page {
+  items: Article[];
+  hasMore: boolean;
 }
 
-export async function getUninterestingUnread(env: Env, threshold: number): Promise<Article[]> {
-  const res = await env.DB.prepare(
-    'SELECT * FROM articles WHERE read_at IS NULL AND interest_level < ? ORDER BY processed_at DESC LIMIT 200'
-  )
-    .bind(threshold)
-    .all<Article>();
-  return res.results;
+function toPage(rows: Article[]): Page {
+  const hasMore = rows.length > PAGE_SIZE;
+  return { items: hasMore ? rows.slice(0, PAGE_SIZE) : rows, hasMore };
 }
 
-export async function getRead(env: Env): Promise<Article[]> {
+export async function getInterestingUnread(env: Env, threshold: number, page: number): Promise<Page> {
+  const offset = (page - 1) * PAGE_SIZE;
   const res = await env.DB.prepare(
-    'SELECT * FROM articles WHERE read_at IS NOT NULL ORDER BY read_at DESC LIMIT 200'
-  ).all<Article>();
-  return res.results;
+    'SELECT * FROM articles WHERE read_at IS NULL AND interest_level >= ? ORDER BY hn_score DESC LIMIT ? OFFSET ?'
+  )
+    .bind(threshold, PAGE_SIZE + 1, offset)
+    .all<Article>();
+  return toPage(res.results);
+}
+
+export async function getUninterestingUnread(env: Env, threshold: number, page: number): Promise<Page> {
+  const offset = (page - 1) * PAGE_SIZE;
+  const res = await env.DB.prepare(
+    'SELECT * FROM articles WHERE read_at IS NULL AND interest_level < ? ORDER BY processed_at DESC LIMIT ? OFFSET ?'
+  )
+    .bind(threshold, PAGE_SIZE + 1, offset)
+    .all<Article>();
+  return toPage(res.results);
+}
+
+export async function getRead(env: Env, page: number): Promise<Page> {
+  const offset = (page - 1) * PAGE_SIZE;
+  const res = await env.DB.prepare(
+    'SELECT * FROM articles WHERE read_at IS NOT NULL ORDER BY read_at DESC LIMIT ? OFFSET ?'
+  )
+    .bind(PAGE_SIZE + 1, offset)
+    .all<Article>();
+  return toPage(res.results);
 }
 
 export async function getArticle(env: Env, id: number): Promise<Article | null> {

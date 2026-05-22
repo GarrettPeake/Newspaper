@@ -67,16 +67,19 @@ export async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext
 
   if (req.method === 'GET') {
     if (path === '/') {
-      const arts = await getInterestingUnread(env, threshold);
-      return html(listPage('feed', arts, 'Nothing in the feed yet — give the cron a few cycles.', true));
+      const page = parsePage(url);
+      const result = await getInterestingUnread(env, threshold, page);
+      return html(listPage('feed', '/', page, result.items, result.hasMore, 'Nothing in the feed yet — give the cron a few cycles.', true));
     }
     if (path === '/uninteresting') {
-      const arts = await getUninterestingUnread(env, threshold);
-      return html(listPage('uninteresting', arts, 'No filtered-out articles yet.', true));
+      const page = parsePage(url);
+      const result = await getUninterestingUnread(env, threshold, page);
+      return html(listPage('uninteresting', '/uninteresting', page, result.items, result.hasMore, 'No filtered-out articles yet.', true));
     }
     if (path === '/read') {
-      const arts = await getRead(env);
-      return html(listPage('read', arts, 'No read articles yet.', false));
+      const page = parsePage(url);
+      const result = await getRead(env, page);
+      return html(listPage('read', '/read', page, result.items, result.hasMore, 'No read articles yet.', false));
     }
     if (path === '/prompt') {
       const current = await getSystemPrompt(env);
@@ -116,6 +119,12 @@ export async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext
   }
 
   return new Response('Not found', { status: 404 });
+}
+
+function parsePage(url: URL): number {
+  const raw = url.searchParams.get('page');
+  const n = raw ? parseInt(raw, 10) : 1;
+  return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
 function html(body: string, status = 200): Response {
