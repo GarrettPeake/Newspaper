@@ -91,8 +91,10 @@ export async function setInterestThreshold(env: Env, value: number): Promise<voi
 export interface AnalyzeParams {
   title: string;
   url: string | null;
-  hnScore: number;
-  hnComments: number;
+  source: string;
+  sourceScore: number;
+  sourceComments: number;
+  tags: string[];
   body: string;
   comments: string;
 }
@@ -202,8 +204,9 @@ function sleep(ms: number): Promise<void> {
 function buildUserMessage(p: AnalyzeParams): string {
   let s = `Title: ${p.title}\n`;
   if (p.url) s += `URL: ${p.url}\n`;
-  s += `HN score: ${p.hnScore}  Comments: ${p.hnComments}\n`;
+  s += `Source: ${p.source}  Score: ${p.sourceScore}  Comments: ${p.sourceComments}\n`;
+  if (p.tags.length) s += `Tags: ${p.tags.join(', ')}\n`;
   if (p.body) s += `\n--- Article ---\n${p.body}\n`;
-  if (p.comments) s += `\n--- Top HN comments ---\n${p.comments}\n`;
+  if (p.comments) s += `\n--- Top ${p.source} comments ---\n${p.comments}\n`;
   return s;
 }

@@ -18,7 +18,10 @@ import {
   unmarkSaved,
   markDismissed,
   unmarkDismissed,
+  type Article,
+  type Source,
 } from './db';
+import { lobstersUrl } from './lobsters';
 import {
   getSystemPrompt,
   setSystemPrompt,
@@ -118,13 +121,17 @@ export async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext
       const a = await getArticle(env, id);
       if (!a) return new Response('Not found', { status: 404 });
       await markRead(env, id);
-      return Response.redirect(a.url ?? a.hn_url, 302);
+      return Response.redirect(a.url ?? discussionUrl(a) ?? '/', 302);
     }
-    const comments = path.match(/^\/comments\/(\d+)$/);
+    const comments = path.match(/^\/comments\/(\d+)(?:\/(hn|lobsters))?$/);
     if (comments) {
       const id = parseInt(comments[1], 10);
+      const a = await getArticle(env, id);
+      if (!a) return new Response('Not found', { status: 404 });
+      const target = discussionUrl(a, comments[2] as Source | undefined);
+      if (!target) return new Response('Not found', { status: 404 });
       await markRead(env, id);
-      return Response.redirect(`https://news.ycombinator.com/item?id=${id}`, 302);
+      return Response.redirect(target, 302);
     }
   }
 
@@ -178,6 +185,13 @@ export async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext
   }
 
   return new Response('Not found', { status: 404 });
+}
+
+// Discussion page for the given source, or the first one the article has.
+function discussionUrl(a: Article, source?: Source): string | null {
+  if (a.hn_id !== null && source !== 'lobsters') return `https://news.ycombinator.com/item?id=${a.hn_id}`;
+  if (a.lobsters_id !== null && source !== 'hn') return lobstersUrl(a.lobsters_id);
+  return null;
 }
 
 const FEED_BATCH_SIZE = 5;

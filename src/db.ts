@@ -4,9 +4,13 @@ export interface Article {
   id: number;
   title: string;
   url: string | null;
-  hn_url: string;
-  hn_score: number;
-  hn_comments: number;
+  canonical_url: string | null;
+  hn_id: number | null;
+  hn_score: number | null;
+  hn_comments: number | null;
+  lobsters_id: string | null;
+  lobsters_score: number | null;
+  lobsters_comments: number | null;
   interest_level: number;
   processed_at: number;
   read_at: number | null;
@@ -15,6 +19,9 @@ export interface Article {
 }
 
 export const PAGE_SIZE = 30;
+
+// Lobsters scores run roughly an order of magnitude below HN's.
+const POPULARITY = '(COALESCE(hn_score, 0) + 5 * COALESCE(lobsters_score, 0))';
 
 export interface Page {
   items: Article[];
@@ -40,7 +47,7 @@ export async function getFeedBatch(
     'SELECT * FROM articles ' +
     'WHERE read_at IS NULL AND dismissed_at IS NULL AND interest_level >= ? AND processed_at >= ?' +
     exclude +
-    ' ORDER BY interest_level DESC, hn_score DESC LIMIT ?';
+    ' ORDER BY interest_level DESC, ' + POPULARITY + ' DESC LIMIT ?';
   const res = await env.DB.prepare(sql)
     .bind(threshold, sinceTimestamp, ...excludeIds, limit)
     .all<Article>();
@@ -110,37 +117,64 @@ export async function unmarkDismissed(env: Env, id: number): Promise<void> {
   await env.DB.prepare('UPDATE articles SET dismissed_at = NULL WHERE id = ?').bind(id).run();
 }
 
-export interface ExistingRow {
-  hn_comments: number;
-  interest_level: number;
+export type Source = 'hn' | 'lobsters';
+
+// Per-source column names; fixed strings, safe to interpolate into SQL.
+const COLS = {
+  hn: { id: 'hn_id', score: 'hn_score', comments: 'hn_comments' },
+  lobsters: { id: 'lobsters_id', score: 'lobsters_score', comments: 'lobsters_comments' },
+} as const;
+
+export interface SourceStats {
+  source: Source;
+  sourceId: number | string;
+  score: number;
+  comments: number;
 }
 
-export async function getExisting(env: Env, id: number): Promise<ExistingRow | null> {
-  return env.DB.prepare('SELECT hn_comments, interest_level FROM articles WHERE id = ?')
-    .bind(id)
+export interface ExistingRow {
+  id: number;
+  comments: number | null;
+}
+
+export async function getBySourceId(env: Env, source: Source, sourceId: number | string): Promise<ExistingRow | null> {
+  const c = COLS[source];
+  return env.DB.prepare(`SELECT id, ${c.comments} AS comments FROM articles WHERE ${c.id} = ?`)
+    .bind(sourceId)
     .first<ExistingRow>();
 }
 
-export async function updateCommentBurst(env: Env, id: number, hnScore: number, hnComments: number): Promise<void> {
+export async function getIdByCanonicalUrl(env: Env, canonical: string): Promise<number | null> {
+  const row = await env.DB.prepare('SELECT id FROM articles WHERE canonical_url = ?').bind(canonical).first<{ id: number }>();
+  return row?.id ?? null;
+}
+
+// Sets this source's id and counts on an existing article; `burst` also bumps it
+// to the top of the feed.
+export async function updateSource(env: Env, id: number, s: SourceStats, burst = false): Promise<void> {
+  const c = COLS[s.source];
   await env.DB.prepare(
-    "UPDATE articles SET hn_score = ?, hn_comments = ?, interest_level = 100 WHERE id = ?"
+    `UPDATE articles SET ${c.id} = ?, ${c.score} = ?, ${c.comments} = ?${burst ? ', interest_level = 100' : ''} WHERE id = ?`
   )
-    .bind(hnScore, hnComments, id)
+    .bind(s.sourceId, s.score, s.comments, id)
     .run();
 }
 
-export async function updateCounts(env: Env, id: number, hnScore: number, hnComments: number): Promise<void> {
-  await env.DB.prepare('UPDATE articles SET hn_score = ?, hn_comments = ? WHERE id = ?')
-    .bind(hnScore, hnComments, id)
-    .run();
-}
-
-export async function insertArticle(env: Env, a: Omit<Article, 'read_at' | 'saved_at' | 'dismissed_at'>): Promise<void> {
+// Inserts a scored article. If another source inserted the same link meanwhile,
+// merges this source's stats into that row instead.
+export async function insertArticle(
+  env: Env,
+  a: { title: string; url: string | null; canonical_url: string | null; interest_level: number },
+  s: SourceStats
+): Promise<void> {
+  const c = COLS[s.source];
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO articles
-      (id, title, url, hn_url, hn_score, hn_comments, interest_level, processed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO articles (title, url, canonical_url, ${c.id}, ${c.score}, ${c.comments}, interest_level, processed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(canonical_url) DO UPDATE SET
+       ${c.id} = excluded.${c.id}, ${c.score} = excluded.${c.score}, ${c.comments} = excluded.${c.comments}
+     ON CONFLICT DO NOTHING`
   )
-    .bind(a.id, a.title, a.url, a.hn_url, a.hn_score, a.hn_comments, a.interest_level, a.processed_at)
+    .bind(a.title, a.url, a.canonical_url, s.sourceId, s.score, s.comments, a.interest_level, Math.floor(Date.now() / 1000))
     .run();
 }

@@ -145,10 +145,22 @@ export function loginPage(next: string, error: boolean): string {
 </html>`;
 }
 
+const SOURCE_LABELS = [
+  ['hn', 'HN'],
+  ['lobsters', 'lobsters'],
+] as const;
+
+function sourceMeta(a: Article): string[] {
+  return SOURCE_LABELS.filter(([src]) => a[`${src}_id`] !== null).map(
+    ([src, label]) =>
+      `${label} ${a[`${src}_score`] ?? 0} pts · <a href="/comments/${a.id}/${src}" target="_blank" rel="noopener">${a[`${src}_comments`] ?? 0} comments</a>`
+  );
+}
+
 function articleRow(a: Article, num: number): string {
   const dom = domain(a.url);
   const titleHref = a.url ? `/open/${a.id}` : `/comments/${a.id}`;
-  const titleExternal = a.url ? ' target="_blank" rel="noopener"' : '';
+  const titleExternal = ' target="_blank" rel="noopener"';
   const saveAction = a.saved_at
     ? `<form method="post" action="/unsave/${a.id}"><button type="submit" class="saved" title="unsave">★</button></form>`
     : `<form method="post" action="/save/${a.id}"><button type="submit" title="save">☆</button></form>`;
@@ -164,7 +176,7 @@ function articleRow(a: Article, num: number): string {
   <div class="body">
     <div class="title"><a href="${titleHref}"${titleExternal}>${escapeHtml(a.title)}</a></div>
     <div class="meta">
-      ${dom ? `${escapeHtml(dom)} · ` : ''}${a.hn_score} pts · <a href="/comments/${a.id}" target="_blank" rel="noopener">${a.hn_comments} comments</a>
+      ${[dom ? escapeHtml(dom) : '', ...sourceMeta(a)].filter(Boolean).join(' · ')}
     </div>
   </div>
   <div class="actions">
@@ -232,16 +244,21 @@ const FEED_SCRIPT = `
     if(queue.length===0){wrap.innerHTML='';empty.hidden=false;return;}
     empty.hidden=true;
     const a=queue[0];
-    const hnUrl='https://news.ycombinator.com/item?id='+a.id;
-    const titleHref=a.url||hnUrl;
-    const frameSrc=a.url||hnUrl;
-    const dom=a.url?domain(a.url):'news.ycombinator.com';
+    const hnUrl=a.hn_id!==null?'https://news.ycombinator.com/item?id='+a.hn_id:null;
+    const lobUrl=a.lobsters_id!==null?'https://lobste.rs/s/'+a.lobsters_id:null;
+    const discussUrl=hnUrl||lobUrl;
+    const titleHref=a.url||discussUrl;
+    const frameSrc=a.url||discussUrl;
+    const dom=domain(titleHref);
+    const meta=[esc(dom)];
+    if(hnUrl)meta.push('HN '+(a.hn_score||0)+' pts · <a href="'+esc(hnUrl)+'" target="_blank" rel="noopener">'+(a.hn_comments||0)+' comments</a>');
+    if(lobUrl)meta.push('lobsters '+(a.lobsters_score||0)+' pts · <a href="'+esc(lobUrl)+'" target="_blank" rel="noopener">'+(a.lobsters_comments||0)+' comments</a>');
     wrap.innerHTML=
       '<div class="feed-header">'+
         '<span class="badge" style="background:'+badgeColor(a.interest_level)+'">'+a.interest_level+'</span>'+
         '<div class="feed-title-block">'+
           '<div class="feed-title"><a href="'+esc(titleHref)+'" target="_blank" rel="noopener">'+esc(a.title)+'</a></div>'+
-          '<div class="meta">'+esc(dom)+' · '+a.hn_score+' pts · <a href="'+esc(hnUrl)+'" target="_blank" rel="noopener">'+a.hn_comments+' comments</a></div>'+
+          '<div class="meta">'+meta.join(' · ')+'</div>'+
         '</div>'+
         '<div class="feed-actions">'+
           '<button data-action="mark-read" title="mark read">✓</button>'+

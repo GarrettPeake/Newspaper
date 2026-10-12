@@ -1,6 +1,7 @@
 import { handleFetch } from './fetch';
 import { handleScheduled } from './scheduled';
 import { handleQueue } from './queue';
+import type { LobstersStory } from './lobsters';
 
 export interface Env {
   DB: D1Database;
@@ -13,9 +14,9 @@ export interface Env {
   OPENROUTER_MODEL: string;
 }
 
-export interface QueueMsg {
-  id: number;
-}
+export type QueueMsg =
+  | { source?: 'hn'; id: number }
+  | { source: 'lobsters'; story: LobstersStory };
 
 export default {
   fetch: handleFetch,
