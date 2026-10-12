@@ -8,7 +8,7 @@
     "crons": ["*/30 * * * *"]
   },
   "vars": {
-    "INTEREST_THRESHOLD": "3",
+    "INTEREST_THRESHOLD": "50",
     "OPENROUTER_MODEL": "openai/gpt-oss-120b"
   },
   "d1_databases": [

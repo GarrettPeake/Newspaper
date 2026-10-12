@@ -15,23 +15,7 @@ main { max-width: 900px; margin: 0 auto; padding: 8px 20px 40px; }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #23262a; }
 .row:last-child { border-bottom: 0; }
 .num { color: #4d535a; font-size: 13px; min-width: 28px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
-.badge { display: inline-flex; justify-content: center; align-items: center; width: 30px; height: 30px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; flex-shrink: 0; position: relative; cursor: help; }
-.badge:hover::after {
-  content: attr(data-reason);
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  width: 320px;
-  background: #1f2226;
-  border: 1px solid #3a3e44;
-  padding: 8px 10px;
-  border-radius: 4px;
-  font: 400 12px/1.5 -apple-system, sans-serif;
-  color: #d0d4d8;
-  white-space: normal;
-  z-index: 10;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
-}
+.badge { display: inline-flex; justify-content: center; align-items: center; width: 30px; height: 30px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; flex-shrink: 0; }
 .body { flex: 1; min-width: 0; }
 .title { font-size: 14px; line-height: 1.4; }
 .title a { color: #d0d4d8; }
@@ -41,13 +25,17 @@ main { max-width: 900px; margin: 0 auto; padding: 8px 20px 40px; }
 .meta a:hover { color: #a8b4c0; }
 .actions { display: flex; gap: 6px; flex-shrink: 0; }
 .actions form { margin: 0; }
-.actions button { background: none; border: 1px solid #3a3e44; color: #8893a0; padding: 4px 9px; font: inherit; font-size: 11px; border-radius: 3px; cursor: pointer; }
+.actions button { background: none; border: 1px solid #3a3e44; color: #8893a0; padding: 4px 9px; font: inherit; font-size: 11px; border-radius: 3px; cursor: pointer; line-height: 1; }
 .actions button:hover { color: #d0d4d8; border-color: #5a5e64; }
+.actions button.saved { color: #e8c896; border-color: #5a4f3a; }
+.actions button.saved:hover { color: #efd4a8; border-color: #7a6a4a; }
 .empty { color: #6d747b; padding: 60px 0; text-align: center; }
 .pager { display: flex; gap: 16px; padding: 16px 0 0; font-size: 13px; color: #6d747b; }
 .pager a { color: #a8b4c0; }
 .pager span.disabled { color: #3a3e44; }
 textarea { width: 100%; min-height: 360px; background: #1a1d20; color: #d0d4d8; border: 1px solid #2a2d31; padding: 12px; font: 13px/1.5 ui-monospace, SFMono-Regular, monospace; border-radius: 4px; resize: vertical; }
+.threshold-input { width: 80px; background: #1a1d20; color: #d0d4d8; border: 1px solid #2a2d31; padding: 8px 10px; font: 14px -apple-system, sans-serif; border-radius: 4px; }
+.threshold-input:focus { outline: none; border-color: #e8c896; }
 .prompt-form { margin: 0; }
 .prompt-form button { background: #e8c896; color: #15171a; border: 0; padding: 8px 18px; border-radius: 4px; font: inherit; font-weight: 600; cursor: pointer; margin-top: 10px; }
 .prompt-form button:hover { background: #efd4a8; }
@@ -64,11 +52,23 @@ textarea { width: 100%; min-height: 360px; background: #1a1d20; color: #d0d4d8; 
 .login-form button:hover { background: #efd4a8; }
 .login-error { color: #e09090; font-size: 13px; }
 .logout-link { margin-left: auto; color: #6d747b !important; font-size: 12px; }
+.feed-empty { color: #6d747b; padding: 60px 0; text-align: center; }
+.feed-header { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0 14px; border-bottom: 1px solid #2a2d31; margin-bottom: 12px; }
+.feed-title-block { flex: 1; min-width: 0; }
+.feed-title { font-size: 16px; line-height: 1.4; }
+.feed-title a { color: #d0d4d8; }
+.feed-title a:visited { color: #888e94; }
+.feed-actions { display: flex; gap: 6px; align-self: center; }
+.feed-actions button { background: none; border: 1px solid #3a3e44; color: #8893a0; padding: 7px 14px; font: inherit; font-size: 14px; border-radius: 3px; cursor: pointer; line-height: 1; }
+.feed-actions button:hover { color: #d0d4d8; border-color: #5a5e64; }
+.feed-actions button:disabled { opacity: 0.5; cursor: default; }
+.feed-frame { display: block; width: 100vw; position: relative; left: 50%; margin-left: -50vw; height: calc(100vh - 142px); min-height: 420px; background: #fff; border: 0; border-top: 1px solid #2a2d31; }
+body.tab-feed main { padding-bottom: 0; }
 `;
 
 function badgeColor(level: number): string {
-  const clamped = Math.max(0, Math.min(10, level));
-  const hue = clamped * 12; // 0 = maroon, 120 = green
+  const clamped = Math.max(0, Math.min(100, level));
+  const hue = clamped * 1.2; // 0 = maroon, 120 = green
   return `hsl(${hue}, 55%, 38%)`;
 }
 
@@ -88,6 +88,7 @@ function domain(url: string | null): string {
 const TABS: Array<[string, string]> = [
   ['/', 'feed'],
   ['/uninteresting', 'uninteresting'],
+  ['/saved', 'saved'],
   ['/read', 'read'],
   ['/prompt', 'prompt'],
 ];
@@ -101,7 +102,7 @@ export function shell(activeTab: string, content: string): string {
 <title>${escapeHtml(activeTab)} · newspaper</title>
 <style>${STYLES}</style>
 </head>
-<body>
+<body class="tab-${escapeHtml(activeTab)}">
 <header>
   <div class="brand">newspaper</div>
   <nav>
@@ -144,13 +145,22 @@ export function loginPage(next: string, error: boolean): string {
 </html>`;
 }
 
-function articleRow(a: Article, num: number, includeMarkRead: boolean): string {
+function articleRow(a: Article, num: number): string {
   const dom = domain(a.url);
   const titleHref = a.url ? `/open/${a.id}` : `/comments/${a.id}`;
   const titleExternal = a.url ? ' target="_blank" rel="noopener"' : '';
+  const saveAction = a.saved_at
+    ? `<form method="post" action="/unsave/${a.id}"><button type="submit" class="saved" title="unsave">★</button></form>`
+    : `<form method="post" action="/save/${a.id}"><button type="submit" title="save">☆</button></form>`;
+  const dismissAction = a.dismissed_at
+    ? `<form method="post" action="/undismiss/${a.id}"><button type="submit" title="restore (undismiss)">↺</button></form>`
+    : `<form method="post" action="/dismiss/${a.id}"><button type="submit" title="not interested">✕</button></form>`;
+  const readAction = a.read_at
+    ? ''
+    : `<form method="post" action="/mark-read/${a.id}"><button type="submit" title="mark read without opening">✓</button></form>`;
   return `<div class="row">
   <span class="num">${num}.</span>
-  <span class="badge" style="background: ${badgeColor(a.interest_level)}" data-reason="${escapeHtml(a.interest_reason)}">${a.interest_level}</span>
+  <span class="badge" style="background: ${badgeColor(a.interest_level)}">${a.interest_level}</span>
   <div class="body">
     <div class="title"><a href="${titleHref}"${titleExternal}>${escapeHtml(a.title)}</a></div>
     <div class="meta">
@@ -158,7 +168,9 @@ function articleRow(a: Article, num: number, includeMarkRead: boolean): string {
     </div>
   </div>
   <div class="actions">
-    ${includeMarkRead ? `<form method="post" action="/mark-read/${a.id}"><button type="submit" title="mark read without opening">✓</button></form>` : ''}
+    ${readAction}
+    ${saveAction}
+    ${dismissAction}
   </div>
 </div>`;
 }
@@ -179,8 +191,7 @@ export function listPage(
   page: number,
   items: Article[],
   hasMore: boolean,
-  emptyMsg: string,
-  includeMarkRead: boolean
+  emptyMsg: string
 ): string {
   const startNum = (page - 1) * PAGE_SIZE_VIEW + 1;
   let content: string;
@@ -188,21 +199,109 @@ export function listPage(
     content = `<div class="empty">${escapeHtml(emptyMsg)}</div>`;
     if (page > 1) content += pager(basePath, page, false);
   } else {
-    content = items.map((a, i) => articleRow(a, startNum + i, includeMarkRead)).join('');
+    content = items.map((a, i) => articleRow(a, startNum + i)).join('');
     content += pager(basePath, page, hasMore);
   }
   return shell(activeTab, content);
 }
 
-export function promptPage(currentPrompt: string, responseSchema: unknown, saved: boolean): string {
+export function feedPage(initialBatch: Article[]): string {
+  const json = JSON.stringify(initialBatch).replace(/</g, '\\u003c');
+  const content = `
+<div id="feed-empty" class="feed-empty" hidden>Inbox zero. New stories arrive every 30 minutes.</div>
+<div id="feed-article"></div>
+<script id="feed-data" type="application/json">${json}</script>
+<script>${FEED_SCRIPT}</script>`;
+  return shell('feed', content);
+}
+
+const FEED_SCRIPT = `
+(function(){
+  const initial = JSON.parse(document.getElementById('feed-data').textContent);
+  const empty = document.getElementById('feed-empty');
+  const wrap = document.getElementById('feed-article');
+  const queue = initial.slice();
+  let fetching = false;
+  const LOW_WATER = 2;
+
+  function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  function badgeColor(level){const c=Math.max(0,Math.min(100,level));return 'hsl('+(c*1.2)+', 55%, 38%)';}
+  function domain(url){try{return new URL(url).hostname.replace(/^www\\./,'');}catch(e){return '';}}
+
+  function render(){
+    if(queue.length===0){wrap.innerHTML='';empty.hidden=false;return;}
+    empty.hidden=true;
+    const a=queue[0];
+    const hnUrl='https://news.ycombinator.com/item?id='+a.id;
+    const titleHref=a.url||hnUrl;
+    const frameSrc=a.url||hnUrl;
+    const dom=a.url?domain(a.url):'news.ycombinator.com';
+    wrap.innerHTML=
+      '<div class="feed-header">'+
+        '<span class="badge" style="background:'+badgeColor(a.interest_level)+'">'+a.interest_level+'</span>'+
+        '<div class="feed-title-block">'+
+          '<div class="feed-title"><a href="'+esc(titleHref)+'" target="_blank" rel="noopener">'+esc(a.title)+'</a></div>'+
+          '<div class="meta">'+esc(dom)+' · '+a.hn_score+' pts · <a href="'+esc(hnUrl)+'" target="_blank" rel="noopener">'+a.hn_comments+' comments</a></div>'+
+        '</div>'+
+        '<div class="feed-actions">'+
+          '<button data-action="mark-read" title="mark read">✓</button>'+
+          '<button data-action="save" title="save">☆</button>'+
+          '<button data-action="dismiss" title="not interested">✕</button>'+
+        '</div>'+
+      '</div>'+
+      '<iframe class="feed-frame" src="'+esc(frameSrc)+'" referrerpolicy="no-referrer"></iframe>';
+    wrap.querySelectorAll('button[data-action]').forEach(b=>{
+      b.addEventListener('click',()=>act(b.dataset.action));
+    });
+  }
+
+  function act(action){
+    const a=queue.shift();
+    if(!a)return;
+    render();
+    if(queue.length<LOW_WATER)refill();
+    fetch('/'+action+'/'+a.id,{method:'POST',redirect:'manual'}).catch(e=>console.error('action failed',e));
+  }
+
+  async function refill(){
+    if(fetching)return;
+    fetching=true;
+    try{
+      const wasEmpty=queue.length===0;
+      const exclude=queue.map(a=>a.id).join(',');
+      const res=await fetch('/feed/batch'+(exclude?'?exclude='+exclude:''));
+      if(!res.ok)return;
+      const data=await res.json();
+      const have=new Set(queue.map(a=>a.id));
+      for(const a of (data.items||[])){if(!have.has(a.id))queue.push(a);}
+      if(wasEmpty&&queue.length>0)render();
+    }catch(e){console.error('refill failed',e);}finally{fetching=false;}
+  }
+
+  render();
+  if(queue.length<LOW_WATER)refill();
+})();
+`;
+
+export function promptPage(
+  currentPrompt: string,
+  currentThreshold: number,
+  decisionInstructions: string,
+  responseSchema: unknown,
+  saved: boolean
+): string {
   const schemaJson = JSON.stringify(responseSchema, null, 2);
   const content = `
 ${saved ? `<div class="flash">Saved.</div>` : ''}
-<div class="section-label">System prompt (editable)</div>
 <form method="post" action="/prompt" class="prompt-form">
+  <div class="section-label">Score threshold (0–100, the chance you want to read it; at or above appears in the feed)</div>
+  <input type="number" name="interest_threshold" min="0" max="100" step="1" value="${currentThreshold}" class="threshold-input">
+  <div class="section-label">System prompt</div>
   <textarea name="system_prompt" spellcheck="false">${escapeHtml(currentPrompt)}</textarea>
   <button type="submit">save</button>
 </form>
+<div class="section-label">Appended to the prompt (fixed)</div>
+<div class="fixed-block">${escapeHtml(decisionInstructions)}</div>
 <div class="section-label">Response schema (enforced by the API via structured outputs)</div>
 <div class="fixed-block">${escapeHtml(schemaJson)}</div>`;
   return shell('prompt', content);

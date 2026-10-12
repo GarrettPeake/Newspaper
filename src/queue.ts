@@ -5,15 +5,18 @@ import { analyzeArticle } from './llm';
 import { getExisting, updateCommentBurst, updateCounts, insertArticle } from './db';
 
 export async function handleQueue(batch: MessageBatch<QueueMsg>, env: Env, _ctx: ExecutionContext): Promise<void> {
-  for (const msg of batch.messages) {
-    try {
-      await processOne(env, msg.body.id);
-      msg.ack();
-    } catch (e) {
-      console.error('queue process failed', msg.body.id, e);
-      msg.retry();
-    }
-  }
+  // Concurrent so one message's OpenRouter retries/backoff don't stall the rest of the batch.
+  await Promise.all(
+    batch.messages.map(async (msg) => {
+      try {
+        await processOne(env, msg.body.id);
+        msg.ack();
+      } catch (e) {
+        console.error('queue process failed', msg.body.id, e);
+        msg.retry({ delaySeconds: 60 });
+      }
+    })
+  )
 }
 
 async function processOne(env: Env, id: number): Promise<void> {
@@ -47,7 +50,7 @@ async function processOne(env: Env, id: number): Promise<void> {
   }
   const comments = await getCommentsText(id);
 
-  const analysis = await analyzeArticle(env, {
+  const score = await analyzeArticle(env, {
     title: item.title,
     url,
     hnScore,
@@ -63,10 +66,9 @@ async function processOne(env: Env, id: number): Promise<void> {
     hn_url: hnUrl,
     hn_score: hnScore,
     hn_comments: hnComments,
-    interest_level: analysis.interest_level,
-    interest_reason: analysis.interest_reason,
+    interest_level: score,
     processed_at: Math.floor(Date.now() / 1000),
   });
 
-  console.log(`analyzed ${id}: ${analysis.interest_level} - ${analysis.interest_reason}`);
+  console.log(`analyzed ${id}: ${score}`);
 }

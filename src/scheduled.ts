@@ -9,7 +9,7 @@ const SEND_BATCH_LIMIT = 100;
 
 async function enqueueTopStories(env: Env): Promise<void> {
   try {
-    const ids = await getTopStoryIds(150);
+    const ids = await getTopStoryIds(90);
     if (ids.length === 0) return;
     for (let i = 0; i < ids.length; i += SEND_BATCH_LIMIT) {
       const slice = ids.slice(i, i + SEND_BATCH_LIMIT);

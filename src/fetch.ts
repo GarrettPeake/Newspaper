@@ -6,20 +6,31 @@ import {
   clearCookieHeader,
   isSafeNext,
 } from './auth';
-import { listPage, promptPage, loginPage } from './views';
+import { listPage, promptPage, loginPage, feedPage } from './views';
 import {
-  getInterestingUnread,
+  getFeedBatch,
   getUninterestingUnread,
   getRead,
+  getSaved,
   getArticle,
   markRead,
+  markSaved,
+  unmarkSaved,
+  markDismissed,
+  unmarkDismissed,
 } from './db';
-import { getSystemPrompt, setSystemPrompt, RESPONSE_SCHEMA } from './llm';
+import {
+  getSystemPrompt,
+  setSystemPrompt,
+  getInterestThreshold,
+  setInterestThreshold,
+  RESPONSE_SCHEMA,
+  DECISION_INSTRUCTIONS,
+} from './llm';
 
 export async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
-  const threshold = parseInt(env.INTEREST_THRESHOLD, 10) || 3;
 
   // Public routes: login / logout
   if (path === '/login') {
@@ -67,24 +78,39 @@ export async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext
 
   if (req.method === 'GET') {
     if (path === '/') {
-      const page = parsePage(url);
-      const result = await getInterestingUnread(env, threshold, page);
-      return html(listPage('feed', '/', page, result.items, result.hasMore, 'Nothing in the feed yet — give the cron a few cycles.', true));
+      const threshold = await getInterestThreshold(env);
+      const since = Math.floor(Date.now() / 1000) - 3 * 86400;
+      const items = await getFeedBatch(env, threshold, since, [], FEED_BATCH_SIZE);
+      return html(feedPage(items));
+    }
+    if (path === '/feed/batch') {
+      const threshold = await getInterestThreshold(env);
+      const since = Math.floor(Date.now() / 1000) - 3 * 86400;
+      const exclude = parseExclude(url.searchParams.get('exclude'));
+      const items = await getFeedBatch(env, threshold, since, exclude, FEED_BATCH_SIZE);
+      return json({ items });
     }
     if (path === '/uninteresting') {
       const page = parsePage(url);
+      const threshold = await getInterestThreshold(env);
       const result = await getUninterestingUnread(env, threshold, page);
-      return html(listPage('uninteresting', '/uninteresting', page, result.items, result.hasMore, 'No filtered-out articles yet.', true));
+      return html(listPage('uninteresting', '/uninteresting', page, result.items, result.hasMore, 'No filtered-out articles yet.'));
     }
     if (path === '/read') {
       const page = parsePage(url);
       const result = await getRead(env, page);
-      return html(listPage('read', '/read', page, result.items, result.hasMore, 'No read articles yet.', false));
+      return html(listPage('read', '/read', page, result.items, result.hasMore, 'No read articles yet.'));
+    }
+    if (path === '/saved') {
+      const page = parsePage(url);
+      const result = await getSaved(env, page);
+      return html(listPage('saved', '/saved', page, result.items, result.hasMore, 'No saved articles yet.'));
     }
     if (path === '/prompt') {
       const current = await getSystemPrompt(env);
+      const threshold = await getInterestThreshold(env);
       const saved = url.searchParams.has('saved');
-      return html(promptPage(current, RESPONSE_SCHEMA, saved));
+      return html(promptPage(current, threshold, DECISION_INSTRUCTIONS, RESPONSE_SCHEMA, saved));
     }
     const open = path.match(/^\/open\/(\d+)$/);
     if (open) {
@@ -107,6 +133,11 @@ export async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext
       const form = await req.formData();
       const value = String(form.get('system_prompt') ?? '').trim();
       if (value) await setSystemPrompt(env, value);
+      const thresholdRaw = String(form.get('interest_threshold') ?? '');
+      const thresholdNum = parseInt(thresholdRaw, 10);
+      if (Number.isFinite(thresholdNum) && thresholdNum >= 0 && thresholdNum <= 100) {
+        await setInterestThreshold(env, thresholdNum);
+      }
       return Response.redirect(new URL('/prompt?saved=1', req.url).toString(), 303);
     }
     const mark = path.match(/^\/mark-read\/(\d+)$/);
@@ -116,10 +147,41 @@ export async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext
       const referer = req.headers.get('Referer') ?? '/';
       return Response.redirect(referer, 303);
     }
+    const save = path.match(/^\/save\/(\d+)$/);
+    if (save) {
+      const id = parseInt(save[1], 10);
+      await markSaved(env, id);
+      const referer = req.headers.get('Referer') ?? '/';
+      return Response.redirect(referer, 303);
+    }
+    const unsave = path.match(/^\/unsave\/(\d+)$/);
+    if (unsave) {
+      const id = parseInt(unsave[1], 10);
+      await unmarkSaved(env, id);
+      const referer = req.headers.get('Referer') ?? '/';
+      return Response.redirect(referer, 303);
+    }
+    const dismiss = path.match(/^\/dismiss\/(\d+)$/);
+    if (dismiss) {
+      const id = parseInt(dismiss[1], 10);
+      await markDismissed(env, id);
+      const referer = req.headers.get('Referer') ?? '/';
+      return Response.redirect(referer, 303);
+    }
+    const undismiss = path.match(/^\/undismiss\/(\d+)$/);
+    if (undismiss) {
+      const id = parseInt(undismiss[1], 10);
+      await unmarkDismissed(env, id);
+      const referer = req.headers.get('Referer') ?? '/';
+      return Response.redirect(referer, 303);
+    }
   }
 
   return new Response('Not found', { status: 404 });
 }
+
+const FEED_BATCH_SIZE = 5;
+const FEED_EXCLUDE_LIMIT = 50;
 
 function parsePage(url: URL): number {
   const raw = url.searchParams.get('page');
@@ -127,11 +189,32 @@ function parsePage(url: URL): number {
   return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
+function parseExclude(raw: string | null): number[] {
+  if (!raw) return [];
+  const ids: number[] = [];
+  for (const part of raw.split(',')) {
+    const n = parseInt(part, 10);
+    if (Number.isFinite(n) && n > 0) ids.push(n);
+    if (ids.length >= FEED_EXCLUDE_LIMIT) break;
+  }
+  return ids;
+}
+
 function html(body: string, status = 200): Response {
   return new Response(body, {
     status,
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
     },
   });
