@@ -1,12 +1,13 @@
 import type { Env } from './index';
 import {
   isAuthenticated,
-  checkLogin,
-  sessionCookieHeader,
-  clearCookieHeader,
+  isCrossOriginPost,
   isSafeNext,
+  handleAuthRequest,
+  signOut,
+  startSignIn,
 } from './auth';
-import { listPage, promptPage, loginPage, feedPage } from './views';
+import { listPage, promptPage, problemPage, signedOutPage, feedPage } from './views';
 import {
   getFeedBatch,
   getUninterestingUnread,
@@ -31,52 +32,83 @@ import {
   DECISION_INSTRUCTIONS,
 } from './llm';
 
+/** Quick sign-in attempts in a row, so a broken sign-in shows a page instead of looping. */
+const TRIES_COOKIE = 'np_signin_tries';
+const MAX_TRIES = 3;
+const tries = (req: Request) => Number(/(?:^|;\s*)np_signin_tries=(\d+)/.exec(req.headers.get('Cookie') ?? '')?.[1] ?? 0);
+const triesCookie = (n: number) =>
+  `${TRIES_COOKIE}=${n || ''}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${n ? 60 : 0}`;
+
+const SIGN_IN_ERRORS: Record<string, string> = {
+  no_role: "Your GAuth account doesn't have the owner role for newspaper.",
+};
+
 export async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
+  // One address (newspaper.gpeake.com), so sessions (host-only cookies) and
+  // GAuth's answers line up. workers.dev links land there.
+  if (url.origin !== env.APP_ORIGIN) return Response.redirect(`${env.APP_ORIGIN}${url.pathname}${url.search}`, 302);
+  if (isCrossOriginPost(req, env)) return new Response('Cross-origin request refused', { status: 403 });
+
+  const signedIn = await isAuthenticated(req, env);
+  const res = await route(req, env, url, signedIn);
+  if (signedIn && tries(req) > 0) {
+    const out = new Response(res.body, res);
+    out.headers.append('Set-Cookie', triesCookie(0));
+    return out;
+  }
+  return res;
+}
+
+/**
+ * Send a signed-out browser to GAuth (no page in between), coming back to `next`;
+ * or, when GAuth answered with ?error= or this keeps happening, say so instead.
+ */
+async function signIn(req: Request, env: Env, url: URL, next: string): Promise<Response> {
+  const retryHref = `/login?retry=1&next=${encodeURIComponent(next)}`;
+  const error = url.searchParams.get('error');
+  if (error !== null) {
+    return html(problemPage(SIGN_IN_ERRORS[error] ?? `Signing in with GAuth failed (${error}).`, retryHref));
+  }
+  const n = url.pathname === '/login' && url.searchParams.get('retry') === '1' ? 0 : tries(req);
+  if (n >= MAX_TRIES) return html(problemPage("Signing in didn't complete.", retryHref));
+  const start = await startSignIn(req, env, next);
+  if (!start) return html(problemPage('Sign-in is unavailable right now.', retryHref), 503);
+  start.headers.append('Set-Cookie', triesCookie(n + 1));
+  return start;
+}
+
+async function route(req: Request, env: Env, url: URL, signedIn: boolean): Promise<Response> {
   const path = url.pathname;
 
-  // Public routes: login / logout
-  if (path === '/login') {
-    if (req.method === 'GET') {
-      if (await isAuthenticated(req, env)) {
-        return Response.redirect(new URL('/', req.url).toString(), 303);
-      }
-      const next = url.searchParams.get('next') ?? '/';
-      return html(loginPage(isSafeNext(next) ? next : '/', false));
-    }
-    if (req.method === 'POST') {
-      const form = await req.formData();
-      const user = String(form.get('username') ?? '');
-      const pass = String(form.get('password') ?? '');
-      const nextRaw = String(form.get('next') ?? '/');
-      const next = isSafeNext(nextRaw) ? nextRaw : '/';
-      if (!checkLogin(env, user, pass)) {
-        return html(loginPage(next, true), 401);
-      }
-      return new Response(null, {
-        status: 303,
-        headers: {
-          Location: new URL(next, req.url).toString(),
-          'Set-Cookie': await sessionCookieHeader(env),
-        },
-      });
-    }
-    return new Response('Method not allowed', { status: 405 });
-  }
+  // Better Auth's endpoints: GAuth's answers (the ACS), the session.
+  if (path.startsWith('/api/auth/')) return handleAuthRequest(req, env);
+
+  if (path === '/signed-out') return html(signedOutPage());
   if (path === '/logout') {
-    return new Response(null, {
-      status: 303,
-      headers: {
-        Location: new URL('/login', req.url).toString(),
-        'Set-Cookie': clearCookieHeader(),
-      },
-    });
+    if (req.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: { Allow: 'POST' } });
+    const headers = new Headers({ Location: '/signed-out' });
+    for (const cookie of await signOut(req, env)) headers.append('Set-Cookie', cookie);
+    return new Response(null, { status: 303, headers });
   }
 
-  // All other routes require an authenticated session
-  if (!(await isAuthenticated(req, env))) {
-    const next = encodeURIComponent(path + url.search);
-    return Response.redirect(new URL(`/login?next=${next}`, req.url).toString(), 303);
+  // There is no login page: /login is where to send a browser to sign in (?next=).
+  if (path === '/login') {
+    const nextRaw = url.searchParams.get('next') ?? '/';
+    const next = isSafeNext(nextRaw) ? nextRaw : '/';
+    if (signedIn) return Response.redirect(new URL(next, req.url).toString(), 303);
+    return signIn(req, env, url, next);
+  }
+
+  // Everything else needs the signed-in owner. Pages go to GAuth and come back;
+  // a script's fetch (the feed's refill, its buttons) just gets a 401.
+  if (!signedIn) {
+    if (req.headers.get('Sec-Fetch-Mode') === 'navigate' || (req.method === 'GET' && !req.headers.has('Sec-Fetch-Mode'))) {
+      return req.method === 'GET'
+        ? signIn(req, env, url, path + url.search)
+        : Response.redirect(new URL('/login', req.url).toString(), 303);
+    }
+    return new Response('Signed out', { status: 401 });
   }
 
   if (req.method === 'GET') {

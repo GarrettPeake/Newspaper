@@ -51,7 +51,11 @@ textarea { width: 100%; min-height: 360px; background: #1a1d20; color: #d0d4d8; 
 .login-form button { background: #e8c896; color: #15171a; border: 0; padding: 9px 16px; border-radius: 4px; font: inherit; font-weight: 600; cursor: pointer; margin-top: 4px; }
 .login-form button:hover { background: #efd4a8; }
 .login-error { color: #e09090; font-size: 13px; }
-.logout-link { margin-left: auto; color: #6d747b !important; font-size: 12px; }
+.logout-form { margin: 0 0 0 auto; }
+.logout-link { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: #6d747b !important; font-size: 12px; }
+.login-wrap p { color: #8893a0; font-size: 14px; }
+.login-wrap .login-form a { text-decoration: none; }
+.login-wrap .login-form a button { width: 100%; }
 .feed-empty { color: #6d747b; padding: 60px 0; text-align: center; }
 .feed-header { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0 14px; border-bottom: 1px solid #2a2d31; margin-bottom: 12px; }
 .feed-title-block { flex: 1; min-width: 0; }
@@ -108,41 +112,51 @@ export function shell(activeTab: string, content: string): string {
   <nav>
     ${TABS.map(([href, name]) => `<a href="${href}"${activeTab === name ? ' class="active"' : ''}>${name}</a>`).join('')}
   </nav>
-  <a href="/logout" class="logout-link">log out</a>
+  <form method="post" action="/logout" class="logout-form"><button type="submit" class="logout-link">log out</button></form>
 </header>
 <main>${content}</main>
 </body>
 </html>`;
 }
 
-export function loginPage(next: string, error: boolean): string {
+function signInPage(title: string, body: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sign in · newspaper</title>
+<title>${escapeHtml(title)} · newspaper</title>
 <style>${STYLES}</style>
 </head>
 <body>
 <div class="login-wrap">
   <h1>newspaper</h1>
-  <form method="post" action="/login" class="login-form" autocomplete="on">
-    <input type="hidden" name="next" value="${escapeHtml(next)}">
-    <label>
-      <span>username</span>
-      <input type="text" name="username" autocomplete="username" autofocus required>
-    </label>
-    <label>
-      <span>password</span>
-      <input type="password" name="password" autocomplete="current-password" required>
-    </label>
-    ${error ? '<div class="login-error">Invalid username or password.</div>' : ''}
-    <button type="submit">sign in</button>
-  </form>
+  ${body}
 </div>
 </body>
 </html>`;
+}
+
+/** Signing in with GAuth didn't work: say why, and offer to try again (no loop). */
+export function problemPage(message: string, retryHref: string): string {
+  return signInPage(
+    'sign in',
+    `<div class="login-form">
+    <div class="login-error">${escapeHtml(message)}</div>
+    <a href="${escapeHtml(retryHref)}"><button type="button">sign in with GAuth</button></a>
+  </div>`,
+  );
+}
+
+/** After logging out: not straight back to GAuth, which would sign right back in. */
+export function signedOutPage(): string {
+  return signInPage(
+    'signed out',
+    `<div class="login-form">
+    <p>Signed out.</p>
+    <a href="/login?retry=1"><button type="button">sign in with GAuth</button></a>
+  </div>`,
+  );
 }
 
 const SOURCE_LABELS = [

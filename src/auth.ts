@@ -1,85 +1,123 @@
+/**
+ * Authentication: GAuth sign-in (src/gauth.ts) with Better Auth sessions.
+ *
+ * Better Auth and the SAML libraries are imported on demand, never at the top of
+ * the Worker, so the cron and the queue consumer never load them.
+ */
 import type { Env } from './index';
 
-const COOKIE_NAME = 'newspaper_session';
-const SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
+type Auth = import('./gauth').Auth;
 
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
+/** Where GAuth posts its answers: the one cross-site POST there is (see isCrossOriginPost). */
+export const GAUTH_ACS_PATH = '/api/auth/sso/saml2/sp/acs/gauth';
 
-async function hmacKey(secret: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-}
+/** Each Set-Cookie on a response (the runtime has getSetCookie; these types may predate it). */
+const setCookies = (headers: Headers): string[] => (headers as Headers & { getSetCookie(): string[] }).getSetCookie();
 
-function b64url(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let s = '';
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-async function sign(payload: string, secret: string): Promise<string> {
-  const key = await hmacKey(secret);
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
-  return b64url(sig);
-}
-
-async function makeToken(env: Env): Promise<string> {
-  const expires = Math.floor(Date.now() / 1000) + SESSION_TTL;
-  const payload = `${env.AUTH_USERNAME}.${expires}`;
-  const sig = await sign(payload, env.AUTH_PASSWORD);
-  return `${payload}.${sig}`;
-}
-
-async function verifyToken(token: string, env: Env): Promise<boolean> {
-  const parts = token.split('.');
-  if (parts.length !== 3) return false;
-  const [user, expStr, sig] = parts;
-  const exp = parseInt(expStr, 10);
-  if (!Number.isFinite(exp) || exp * 1000 < Date.now()) return false;
-  if (user !== env.AUTH_USERNAME) return false;
-  const expected = await sign(`${user}.${expStr}`, env.AUTH_PASSWORD);
-  return timingSafeEqual(sig, expected);
-}
-
-function getCookie(req: Request, name: string): string | null {
-  const header = req.headers.get('Cookie');
-  if (!header) return null;
-  for (const pair of header.split(';')) {
-    const [k, ...rest] = pair.trim().split('=');
-    if (k === name) return rest.join('=');
+/** GAuth sign-in, or null when it can't be set up (a missing secret, say). */
+async function loadAuth(env: Env): Promise<Auth | null> {
+  try {
+    const { getAuth } = await import('./gauth');
+    return getAuth(env);
+  } catch (error) {
+    console.error('GAuth sign-in unavailable', String(error));
+    return null;
   }
-  return null;
 }
 
+/** Whether the request carries a Better Auth session cookie (`__Secure-` prefixed over https). */
+function hasSessionCookie(req: Request): boolean {
+  return (req.headers.get('Cookie') ?? '').includes('better-auth.session_token=');
+}
+
+/** Whether the request is from the signed-in owner (a GAuth session with the owner role). */
 export async function isAuthenticated(req: Request, env: Env): Promise<boolean> {
-  const token = getCookie(req, COOKIE_NAME);
-  if (!token) return false;
-  return verifyToken(token, env);
+  // Without a session cookie there's nothing to check, so don't pay to load Better Auth.
+  if (!hasSessionCookie(req)) return false;
+  const auth = await loadAuth(env);
+  if (!auth) return false;
+  try {
+    const { isOwner } = await import('./gauth');
+    return await isOwner(auth, req.headers);
+  } catch (error) {
+    console.error('Session check failed', String(error));
+    return false;
+  }
 }
 
-export async function sessionCookieHeader(env: Env): Promise<string> {
-  const token = await makeToken(env);
-  return `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL}`;
+/** Better Auth's own endpoints (/api/auth/*): GAuth's answers, the session. */
+export async function handleAuthRequest(req: Request, env: Env): Promise<Response> {
+  const auth = await loadAuth(env);
+  if (!auth) return new Response('Sign-in unavailable', { status: 503 });
+  return auth.handler(req);
 }
 
-export function clearCookieHeader(): string {
-  return `${COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+/**
+ * Send the browser to GAuth to sign in, coming back to `callbackPath`.
+ *
+ * Starts the sign-in on the server (it's Better Auth's POST /sign-in/sso), so
+ * opening any page goes to GAuth in one redirect with no page in between.
+ * Returns null if sign-in can't start.
+ */
+export async function startSignIn(req: Request, env: Env, callbackPath: string): Promise<Response | null> {
+  const auth = await loadAuth(env);
+  if (!auth) return null;
+  const headers = new Headers({ 'Content-Type': 'application/json', Origin: env.APP_ORIGIN });
+  for (const name of ['Cookie', 'CF-Connecting-IP', 'User-Agent']) {
+    const value = req.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  const res = await auth.handler(
+    new Request(`${env.APP_ORIGIN}/api/auth/sign-in/sso`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        providerId: 'gauth',
+        callbackURL: callbackPath,
+        // Better Auth adds ?error=<code>; /login shows it instead of redirecting again.
+        errorCallbackURL: '/login',
+      }),
+    }),
+  );
+  const data = res.ok ? ((await res.json().catch(() => null)) as { url?: unknown } | null) : null;
+  if (typeof data?.url !== 'string') {
+    console.error('Starting GAuth sign-in failed', res.status);
+    return null;
+  }
+  const redirect = new Headers({ Location: data.url, 'Cache-Control': 'no-store' });
+  // The relay state cookie ties GAuth's answer to this browser.
+  for (const cookie of setCookies(res.headers)) redirect.append('Set-Cookie', cookie);
+  return new Response(null, { status: 302, headers: redirect });
 }
 
-export function checkLogin(env: Env, username: string, password: string): boolean {
-  return timingSafeEqual(username, env.AUTH_USERNAME) && timingSafeEqual(password, env.AUTH_PASSWORD);
+/** End the session (Better Auth's sign-out), returning its cookie-clearing Set-Cookie values. */
+export async function signOut(req: Request, env: Env): Promise<string[]> {
+  if (!hasSessionCookie(req)) return [];
+  const auth = await loadAuth(env);
+  if (!auth) return [];
+  const headers = new Headers({ Origin: env.APP_ORIGIN });
+  const cookie = req.headers.get('Cookie');
+  if (cookie) headers.set('Cookie', cookie);
+  const res = await auth.handler(new Request(`${env.APP_ORIGIN}/api/auth/sign-out`, { method: 'POST', headers }));
+  return setCookies(res.headers);
+}
+
+/**
+ * A state-changing request from another origin. On newspaper.gpeake.com every
+ * other *.gpeake.com site is "same-site", so SameSite=Lax alone would let them
+ * post here with the session cookie. GAuth's answer is the one cross-site POST
+ * there is: Better Auth checks it (a signed assertion answering a request this
+ * browser started).
+ */
+export function isCrossOriginPost(req: Request, env: Env): boolean {
+  if (req.method === 'GET' || req.method === 'HEAD') return false;
+  if (new URL(req.url).pathname === GAUTH_ACS_PATH) return false;
+  const origin = req.headers.get('Origin');
+  if (origin) return origin !== env.APP_ORIGIN;
+  const site = req.headers.get('Sec-Fetch-Site');
+  return site !== null && site !== 'same-origin' && site !== 'none';
 }
 
 export function isSafeNext(next: string): boolean {
-  return next.startsWith('/') && !next.startsWith('//');
+  return next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') && !next.startsWith('/api/') && !next.startsWith('/login');
 }
